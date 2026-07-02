@@ -13,36 +13,20 @@
 
 package frc.robot;
 
-import ControlAnnotations.DriveMode;
-import com.ctre.phoenix6.swerve.SwerveModuleConstants;
-import com.ctre.phoenix6.swerve.SwerveModuleConstants.DriveMotorArrangement;
-import com.ctre.phoenix6.swerve.SwerveModuleConstants.SteerMotorArrangement;
-import com.revrobotics.servohub.ServoHub;
-import edu.wpi.first.math.geometry.Pose2d;
-import edu.wpi.first.math.geometry.Pose3d;
-import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.geometry.Rotation3d;
-import edu.wpi.first.math.util.Units;
-import edu.wpi.first.networktables.NetworkTable;
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.XboxController;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
-import frc.robot.commands.PanicCommand;
-import frc.robot.generated.TunerConstants;
-import frc.robot.subsystems.drive.*;
+import frc.robot.subsystems.drive.Drivetrain;
 import frc.robot.subsystems.indexer.Indexer;
 import frc.robot.subsystems.indexer.IndexerIO;
 import frc.robot.subsystems.indexer.IndexerIOCompetition;
 import frc.robot.subsystems.indexer.IndexerIOSim;
 import frc.robot.subsystems.intake.Intake;
-import frc.robot.subsystems.intake.IntakeIO;
-import frc.robot.subsystems.intake.IntakeIOCompetition;
 import frc.robot.subsystems.limelight.LimelightCamera;
-import frc.robot.subsystems.robotControl.RobotControl;
 import frc.robot.subsystems.shooter.ShooterArray;
-import frc.robot.subsystems.shooter.ShooterStack;
 import frc.robot.subsystems.shooter.feeder.Feeder;
 import frc.robot.subsystems.shooter.feeder.FeederIO;
 import frc.robot.subsystems.shooter.feeder.FeederIOCompetition;
@@ -51,21 +35,7 @@ import frc.robot.subsystems.shooter.flywheel.Flywheel;
 import frc.robot.subsystems.shooter.flywheel.FlywheelIO;
 import frc.robot.subsystems.shooter.flywheel.FlywheelIOCompetition;
 import frc.robot.subsystems.shooter.flywheel.FlywheelIOSim;
-import frc.robot.subsystems.shooter.hood.Hood;
-import frc.robot.subsystems.shooter.hood.HoodIO;
-import frc.robot.subsystems.shooter.hood.HoodIOCompetition;
-import frc.robot.subsystems.shooter.hood.HoodIOSim;
-import frc.robot.subsystems.shooter.turret.Turret;
-import frc.robot.subsystems.shooter.turret.TurretIO;
-import frc.robot.subsystems.shooter.turret.TurretIOCompetition;
-import frc.robot.subsystems.shooter.turret.TurretIOSim;
-import frc.robot.util.DrivetrainPublisher;
 import frc.robot.util.GenericNTButton;
-import frc.robot.utils.DriveModes;
-import frc.robot.utils.RobotStates;
-import frc.robot.utils.RobotTransitions;
-import org.ironmaple.simulation.SimulatedArena;
-import org.ironmaple.simulation.drivesims.SwerveDriveSimulation;
 import org.littletonrobotics.junction.LogFileUtil;
 import org.littletonrobotics.junction.LoggedRobot;
 import org.littletonrobotics.junction.Logger;
@@ -83,25 +53,25 @@ public class Robot extends LoggedRobot {
   private Command autonomousCommand;
   private final RobotContainer robotContainer;
 
-  public static ServoHub servoHub;
-
   public static Drivetrain drivetrain;
   public static ShooterArray shooterArray = new ShooterArray();
   public static Indexer indexer;
   public static Intake intake;
-//  public static LimelightCamera shooterLimelight;
-//  public static LimelightCamera swerveLimelight;
   public static LimelightCamera rightHopperLimelight;
   public static LimelightCamera leftHopperLimelight;
 
-  public static GenericNTButton hubStateButton = new GenericNTButton("Hub State", NetworkTableInstance.getDefault().getTable("Hub State"), true);
+  public static Flywheel leftFlywheel;
+  public static Flywheel rightFlywheel;
+  public static Feeder leftFeeder;
+  public static Feeder rightFeeder;
 
-  public static SwerveDriveSimulation driveSimulation = null;
+  public static GenericNTButton hubStateButton =
+      new GenericNTButton("Hub State", NetworkTableInstance.getDefault().getTable("Hub State"), true);
 
-  public static final XboxController driverController = new XboxController(Constants.DriverController.PORT);
+  public static final XboxController driverController =
+      new XboxController(Constants.DriverController.PORT);
 
   public Robot() {
-    // Record metadata
     Logger.recordMetadata("ProjectName", BuildConstants.MAVEN_NAME);
     Logger.recordMetadata("BuildDate", BuildConstants.BUILD_DATE);
     Logger.recordMetadata("GitSHA", BuildConstants.GIT_SHA);
@@ -119,296 +89,150 @@ public class Robot extends LoggedRobot {
         break;
     }
 
-    // Set up data receivers & replay source
     switch (Constants.currentMode) {
       case REAL:
-        // Running on a real robot, log to a USB stick ("/U/logs")
         Logger.addDataReceiver(new WPILOGWriter());
         Logger.addDataReceiver(new NT4Publisher());
         break;
 
       case SIM:
-        // Running a physics simulator, log to NT
         Logger.addDataReceiver(new NT4Publisher());
         break;
 
       case REPLAY:
-        // Replaying a log, set up replay source
-        setUseTiming(false); // Run as fast as possible
+        setUseTiming(false);
         String logPath = LogFileUtil.findReplayLog();
         Logger.setReplaySource(new WPILOGReader(logPath));
         Logger.addDataReceiver(new WPILOGWriter(LogFileUtil.addPathSuffix(logPath, "_sim")));
         break;
     }
 
-    // Start AdvantageKit logger
     Logger.start();
 
-    // Check for valid swerve config
-    var modules =
-        new SwerveModuleConstants[] {
-          TunerConstants.FrontLeft,
-          TunerConstants.FrontRight,
-          TunerConstants.BackLeft,
-          TunerConstants.BackRight
-        };
-    for (var constants : modules) {
-      if (constants.DriveMotorType != DriveMotorArrangement.TalonFX_Integrated
-          || constants.SteerMotorType != SteerMotorArrangement.TalonFX_Integrated) {
-        throw new RuntimeException(
-            "You are using an unsupported swerve configuration, which this template does not support without manual customization. The 2025 release of Phoenix supports some swerve configurations which were not available during 2025 beta testing, preventing any development and support from the AdvantageKit developers.");
-      }
-    }
-
     switch (Constants.currentMode) {
-          case REAL:
-              // Real robot, instantiate hardware IO implementations
+      case REAL:
+        leftFlywheel =
+            new Flywheel(
+                "leftFlywheel",
+                new FlywheelIOCompetition(Constants.Shooter.Flywheel.leftFlywheelMotorCANID));
+        rightFlywheel =
+            new Flywheel(
+                "rightFlywheel",
+                new FlywheelIOCompetition(Constants.Shooter.Flywheel.rightFlywheelMotorCANID));
+        leftFeeder =
+            new Feeder(
+                "leftFeeder",
+                new FeederIOCompetition(Constants.Shooter.Feeder.leftFeederMotorCANID));
+        rightFeeder =
+            new Feeder(
+                "rightFeeder",
+                new FeederIOCompetition(Constants.Shooter.Feeder.rightFeederMotorCANID));
+        indexer = new Indexer(new IndexerIOCompetition());
+        break;
 
-              servoHub = new ServoHub(Constants.ServoHubCANID);
+      case SIM:
+        leftFlywheel = new Flywheel("leftFlywheel", new FlywheelIOSim());
+        rightFlywheel = new Flywheel("rightFlywheel", new FlywheelIOSim());
+        leftFeeder = new Feeder("leftFeeder", new FeederIOSim());
+        rightFeeder = new Feeder("rightFeeder", new FeederIOSim());
+        indexer = new Indexer(new IndexerIOSim());
+        break;
 
-              drivetrain =
-                      new Drivetrain(
-                              new GyroIOPigeon2(),
-                              new ModuleIOReal(TunerConstants.FrontLeft),
-                              new ModuleIOReal(TunerConstants.FrontRight),
-                              new ModuleIOReal(TunerConstants.BackLeft),
-                              new ModuleIOReal(TunerConstants.BackRight));
-              shooterArray.addShooter(new ShooterStack(
-                      "LeftShooterStack",
-                      new Turret("leftTurret", new TurretIOCompetition(Constants.Shooter.Turret.leftTurretMotorCANID)),
-                      new Hood("leftHood", new HoodIOCompetition(Constants.Shooter.Hood.leftHoodServoHubPort)),
-                      new Flywheel("leftFlywheel", new FlywheelIOCompetition(Constants.Shooter.Flywheel.leftFlywheelMotorCANID)),
-                      new Feeder("leftFeeder", new FeederIOCompetition(Constants.Shooter.Feeder.leftFeederMotorCANID)),
-                      new Pose2d(Units.inchesToMeters(-5.75), Units.inchesToMeters(5.75), new Rotation2d())
-              ));
-              shooterArray.addShooter(new ShooterStack(
-                      "RightShooterStack",
-                      new Turret("rightTurret", new TurretIOCompetition(Constants.Shooter.Turret.rightTurretMotorCANID)),
-                      new Hood("rightHood", new HoodIOCompetition(Constants.Shooter.Hood.rightHoodServoHubPort)),
-                      new Flywheel("rightFlywheel", new FlywheelIOCompetition(Constants.Shooter.Flywheel.rightFlywheelMotorCANID)),
-                      new Feeder("rightFeeder", new FeederIOCompetition(Constants.Shooter.Feeder.rightFeederMotorCANID)),
-                      new Pose2d(Units.inchesToMeters(-5.75), Units.inchesToMeters(-5.75), new Rotation2d())
-              ));
-              indexer = new Indexer(new IndexerIOCompetition());
-              intake = new Intake(new IntakeIOCompetition());
-//              shooterLimelight = new LimelightCamera("limelight-turret", new Pose3d(Units.inchesToMeters(-12.140), Units.inchesToMeters(12.745), Units.inchesToMeters(19.296), new Rotation3d(0, 0, Units.degreesToRadians(-128))), LimelightCamera.limelightPipeline.APRIL_TAG);
-//              swerveLimelight = new LimelightCamera("limelight-swerve", new Pose3d(Units.inchesToMeters(6.833), Units.inchesToMeters(11.255), Units.inchesToMeters(8.691), new Rotation3d(0, Units.degreesToRadians(15), Units.degreesToRadians(-35))), LimelightCamera.limelightPipeline.APRIL_TAG);
-              rightHopperLimelight = new LimelightCamera("limelight-right", new Pose3d(Units.inchesToMeters(-1.072), Units.inchesToMeters(13.386), Units.inchesToMeters(18.796), new Rotation3d(0, 0, Units.degreesToRadians(-90))), LimelightCamera.limelightPipeline.APRIL_TAG);
-              leftHopperLimelight = new LimelightCamera("limelight-left", new Pose3d(Units.inchesToMeters(-1.072), Units.inchesToMeters(-13.386), Units.inchesToMeters(18.171), new Rotation3d(0, Units.degreesToRadians(180), Units.degreesToRadians(-90))), LimelightCamera.limelightPipeline.APRIL_TAG);
-              break;
-
-          case SIM:
-              // Sim robot, instantiate physics sim IO implementations
-
-            driveSimulation = new SwerveDriveSimulation(Drivetrain.mapleSimConfig, new Pose2d(1, 0.5, new Rotation2d()));
-            SimulatedArena.getInstance().addDriveTrainSimulation(driveSimulation);
-              drivetrain =
-                      new Drivetrain(
-                              new GyroIO() {},
-                              new ModuleIOSim(TunerConstants.FrontLeft, driveSimulation.getModules()[0]),
-                              new ModuleIOSim(TunerConstants.FrontRight, driveSimulation.getModules()[1]),
-                              new ModuleIOSim(TunerConstants.BackLeft, driveSimulation.getModules()[2]),
-                              new ModuleIOSim(TunerConstants.BackRight, driveSimulation.getModules()[3]));
-              shooterArray.addShooter(new ShooterStack(
-                      "LeftShooterStack",
-                      new Turret("leftTurret", new TurretIOSim()),
-                      new Hood("leftHood", new HoodIOSim()),
-                      new Flywheel("leftFlywheel", new FlywheelIOSim()),
-                      new Feeder("leftFeeder", new FeederIOSim()),
-                      new Pose2d(Units.inchesToMeters(-8), Units.inchesToMeters(8), new Rotation2d())
-              ));
-              shooterArray.addShooter(new ShooterStack(
-                      "RightShooterStack",
-                      new Turret("rightTurret", new TurretIOSim()),
-                      new Hood("rightHood", new HoodIOSim()),
-                      new Flywheel("rightFlywheel", new FlywheelIOSim()),
-                      new Feeder("rightFeeder", new FeederIOSim()),
-                      new Pose2d(Units.inchesToMeters(-8), Units.inchesToMeters(-8), new Rotation2d())
-              ));
-              indexer = new Indexer(new IndexerIO() {});
-
-              intake = new Intake(new IntakeIO() {});
-
-              shooterArray.setTarget(Constants.FieldPoses.blueHub);
-              shooterArray.setInterpolationMaps(Constants.Shooter.simHoodAngleInterpolationMap, Constants.Shooter.simFlywheelVelocityInterpolationMap);
-              break;
-
-          default:
-              // Replayed robot, disable IO implementations
-              drivetrain =
-                      new Drivetrain(
-                              new GyroIO() {},
-                              new ModuleIO() {},
-                              new ModuleIO() {},
-                              new ModuleIO() {},
-                              new ModuleIO() {});
-              shooterArray.addShooter(new ShooterStack(
-                      "LeftShooterStack",
-                      new Turret("leftTurret", new TurretIO() {}),
-                      new Hood("leftHood", new HoodIO() {}),
-                      new Flywheel("leftFlywheel", new FlywheelIO() {}),
-                      new Feeder("leftFeeder", new FeederIO() {}),
-                      new Pose2d()
-              ));
-              shooterArray.addShooter(new ShooterStack(
-                      "RightShooterStack",
-                      new Turret("rightTurret", new TurretIO() {}),
-                      new Hood("rightHood", new HoodIO() {}),
-                      new Flywheel("rightFlywheel", new FlywheelIO() {}),
-                      new Feeder("rightFeeder", new FeederIO() {}),
-                      new Pose2d()
-              ));
-              indexer = new Indexer(new IndexerIO() {});
-              break;
+      default:
+        leftFlywheel = new Flywheel("leftFlywheel", new FlywheelIO() {});
+        rightFlywheel = new Flywheel("rightFlywheel", new FlywheelIO() {});
+        leftFeeder = new Feeder("leftFeeder", new FeederIO() {});
+        rightFeeder = new Feeder("rightFeeder", new FeederIO() {});
+        indexer = new Indexer(new IndexerIO() {});
+        break;
     }
 
-    new RobotControl();
-
-    // Instantiate our RobotContainer. This will perform all our button bindings,
-    // and put our autonomous chooser on the dashboard.
     robotContainer = new RobotContainer();
-
-      RobotStates.initStates();
-      RobotTransitions.initTransitions();
-      DriveModes.initDriveModes();
-
-      RobotControl.setPanicCommand(new PanicCommand());
-    // initialize default state and drive commands
-    RobotControl.setDriveModeCommand(DriveModes.teleopDrive);
-    RobotControl.setCurrentMode(RobotTransitions.shooterStacksInit);
-//    drivetrain.setPose(new Pose2d(0, 2, Rotation2d.fromDegrees(32)));
+    stopAllMotorOutputs();
   }
 
-  /** This function is called periodically during all modes. */
   @Override
   public void robotPeriodic() {
-    // Optionally switch the thread to high priority to improve loop
-    // timing (see the template project documentation for details)
-    // Threads.setCurrentThreadPriority(true, 99);
-
-    // Runs the Scheduler. This is responsible for polling buttons, adding
-    // newly-scheduled commands, running already-scheduled commands, removing
-    // finished or interrupted commands, and running subsystem periodic() methods.
-    // This must be called from the robot's periodic block in order for anything in
-    // the Command-based framework to work.
     CommandScheduler.getInstance().run();
-
-    // Return to non-RT thread priority (do not modify the first argument)
-    // Threads.setCurrentThreadPriority(false, 10);
   }
 
-  /** This function is called once when the robot is disabled. */
   @Override
-  public void disabledInit() {}
+  public void disabledInit() {
+    stopAllMotorOutputs();
+  }
 
-  /** This function is called periodically when disabled. */
   @Override
   public void disabledPeriodic() {}
 
-  /** This autonomous runs the autonomous command selected by your {@link RobotContainer} class. */
   @Override
   public void autonomousInit() {
-    DrivetrainPublisher.setAcceptInputsSupplier(() -> false);
-//    shooterLimelight.disableEstimation();
-//    swerveLimelight.disableEstimation();
-//    rightHopperLimelight.disableEstimation();
-//    leftHopperLimelight.disableEstimation();
-
+    stopAllMotorOutputs();
     autonomousCommand = robotContainer.getAutonomousCommand();
-
-    // schedule the autonomous command (example)
     if (autonomousCommand != null) {
       CommandScheduler.getInstance().schedule(autonomousCommand);
     }
-
   }
 
-  /** This function is called periodically during autonomous. */
   @Override
   public void autonomousPeriodic() {}
 
-  /** This function is called once when teleop is enabled. */
   @Override
   public void teleopInit() {
-    // This makes sure that the autonomous stops running when
-    // teleop starts running. If you want the autonomous to
-    // continue until interrupted by another command, remove
-    // this line or comment it out.
     if (autonomousCommand != null) {
       autonomousCommand.cancel();
     }
-
-    DrivetrainPublisher.setAcceptInputsSupplier(() -> true);
-//    swerveLimelight.enableEstimation();
-//    shooterLimelight.enableEstimation();
-//    rightHopperLimelight.enableEstimation();
-//    leftHopperLimelight.enableEstimation();
+    stopAllMotorOutputs();
   }
 
-  /** This function is called periodically during operator control. */
   @Override
   public void teleopPeriodic() {
-//    if (Robot.driverController.getLeftTriggerAxis() > 0.5) {
-//      // Intake mode
-//      Robot.shooterArray.enableShooting(false);
-//      Robot.intake.setRollerVelocity(60);
-////      Robot.indexer.setIndexVelocity(25);
-//      Robot.intake.setPivotPosition(-0.5);
-//      Robot.shooterArray.setFeederVelocity(-10);
-//    } else if (Robot.driverController.getRightTriggerAxis() > 0.5) {
-//      // Shoot mode
-//      Robot.shooterArray.enableShooting(true);
-//      Robot.shooterArray.setHoodAngle(1100);
-//      Robot.intake.setRollerVelocity(45);
-//      Robot.indexer.setIndexVelocity(25);
-//      Robot.intake.setPivotPosition(0.25);
-//    } else if (Robot.driverController.getLeftBumperButton()) {
-//      Robot.intake.setRollerVelocity(-30);
-//      Robot.indexer.setIndexVelocity(-25);
-//      Robot.shooterArray.setFeederVelocity(-20);
-//    } else {
-//      // Neutral mode
-//      Robot.shooterArray.enableShooting(false);
-//      Robot.intake.setRollerSpeed(0);
-//      Robot.indexer.setIndexSpeed(0);
-//      Robot.shooterArray.setHoodAngle(1000);
-//      Robot.shooterArray.setFeederVelocity(0);
-//      Robot.intake.setPivotSpeed(0);
-//    }
+    double combinedPower =
+        MathUtil.applyDeadband(
+            driverController.getRightTriggerAxis() - driverController.getLeftTriggerAxis(), 0.05);
+
+    leftFlywheel.setPower(combinedPower);
+    rightFlywheel.setPower(combinedPower);
+    leftFeeder.setFeedSpeed(combinedPower);
+    rightFeeder.setFeedSpeed(combinedPower);
+    indexer.setIndexSpeed(combinedPower);
   }
 
-  /** This function is called once when test mode is enabled. */
   @Override
   public void testInit() {
-    // Cancels all running commands at the start of test mode.
     CommandScheduler.getInstance().cancelAll();
-    drivetrain.setPose(new Pose2d(13.8, 4.0, Rotation2d.fromRadians(Units.degreesToRadians(180))));
+    stopAllMotorOutputs();
   }
 
-  /** This function is called periodically during test mode. */
   @Override
   public void testPeriodic() {}
 
-  /** This function is called once when the robot is first started up. */
   @Override
   public void simulationInit() {}
 
-  /** This function is called periodically whilst in simulation. */
   @Override
-  public void simulationPeriodic() {
-    if (Constants.currentMode != Constants.Mode.SIM) return;
+  public void simulationPeriodic() {}
 
-    SimulatedArena.getInstance().simulationPeriodic();
-    Logger.recordOutput("FieldSimulation/RobotPosition", driveSimulation.getSimulatedDriveTrainPose());
-    Logger.recordOutput("FieldSimulation/Fuel", SimulatedArena.getInstance().getGamePiecesArrayByType("Fuel"));
-//    driveSimulation.setAngularVelocity(Units.degreesToRadians(15));
-//
-//    if (drivetrain.getPose().getY() < 7.3) {
-//      driveSimulation.setLinearVelocity(0.2, 0.5);
-//    }
+  private void stopAllMotorOutputs() {
+    if (leftFlywheel != null) {
+      leftFlywheel.setPower(0);
+    }
+    if (rightFlywheel != null) {
+      rightFlywheel.setPower(0);
+    }
+    if (leftFeeder != null) {
+      leftFeeder.setFeedSpeed(0);
+    }
+    if (rightFeeder != null) {
+      rightFeeder.setFeedSpeed(0);
+    }
+    if (indexer != null) {
+      indexer.setIndexSpeed(0);
+    }
   }
 
-    public static DriverStation.Alliance getAlliance() {
-      return DriverStation.isDSAttached() ? DriverStation.getAlliance().orElse(DriverStation.Alliance.Blue) : DriverStation.Alliance.Blue;
-    }
+  public static DriverStation.Alliance getAlliance() {
+    return DriverStation.isDSAttached()
+        ? DriverStation.getAlliance().orElse(DriverStation.Alliance.Blue)
+        : DriverStation.Alliance.Blue;
+  }
 }
