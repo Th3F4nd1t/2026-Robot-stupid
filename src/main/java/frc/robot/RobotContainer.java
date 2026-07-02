@@ -13,23 +13,14 @@
 
 package frc.robot;
 
-import com.pathplanner.lib.auto.AutoBuilder;
-import com.pathplanner.lib.auto.NamedCommands;
-import com.pathplanner.lib.events.EventTrigger;
 import edu.wpi.first.wpilibj.GenericHID;
 import edu.wpi.first.wpilibj.XboxController;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.button.Trigger;
-import frc.robot.commands.BasicAuton;
 import frc.robot.commands.PanicCommand;
 import frc.robot.subsystems.robotControl.RobotControl;
 import frc.robot.util.HubState;
-import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
-
-import java.util.Map;
-
-import static java.util.Map.entry;
 
 /**
  * This class is where the bulk of the robot should be declared. Since Command-based is a
@@ -38,22 +29,9 @@ import static java.util.Map.entry;
  * subsystems, commands, and button mappings) should be declared here.
  */
 public class RobotContainer {
-
-  // Dashboard inputs
-  private final LoggedDashboardChooser<Command> autoChooser;
-
   /** The container for the robot. Contains subsystems, OI devices, and commands. */
   public RobotContainer() {
-      RobotControl.setPanicCommand(new PanicCommand());
-
-      setUpPathplannerCommands();
-
-    // Set up auto routines
-    autoChooser = new LoggedDashboardChooser<>("Auto Choices", AutoBuilder.buildAutoChooser());
-
-    autoChooser.addDefaultOption("Basic Auto", new BasicAuton());
-
-    // Configure the button bindings
+    RobotControl.setPanicCommand(new PanicCommand());
     configureButtonBindings();
   }
 
@@ -64,20 +42,10 @@ public class RobotContainer {
    * edu.wpi.first.wpilibj2.command.button.JoystickButton}.
    */
   private void configureButtonBindings() {
-      new Trigger(HubState::isActive).onTrue(new InstantCommand(() -> Robot.hubStateButton.set(true))).onFalse(new InstantCommand(() -> Robot.hubStateButton.set(false)));
-      new Trigger(Robot.driverController::getStartButton).onTrue(new InstantCommand(RobotControl::panic));
-  }
-
-  private void setUpPathplannerCommands() {
-
-      Map<String, Command> pathPlannerCommands = Map.ofEntries(
-              entry("Enable Intake", TriggerBoard.enableIntakeButtonAutonomous()),
-              entry("Disable Intake", TriggerBoard.disableIntakeButtonAutonomous()),
-              entry("Enable Shooting", TriggerBoard.enableShootingButtonAutonomous()),
-              entry("Disable Shooting", TriggerBoard.disableShootingButtonAutonomous())
-      );
-
-      NamedCommands.registerCommands(pathPlannerCommands);
+    new Trigger(HubState::isActive)
+        .onTrue(new InstantCommand(() -> Robot.hubStateButton.set(true)))
+        .onFalse(new InstantCommand(() -> Robot.hubStateButton.set(false)));
+    new Trigger(Robot.driverController::getStartButton).onTrue(new InstantCommand(RobotControl::panic));
   }
 
   /**
@@ -86,6 +54,6 @@ public class RobotContainer {
    * @return the command to run in autonomous
    */
   public Command getAutonomousCommand() {
-    return autoChooser.get();
+    return null;
   }
 }
