@@ -186,6 +186,7 @@ public class Robot extends LoggedRobot {
 
   @Override
   public void teleopPeriodic() {
+    // Right trigger runs motors forward, left trigger runs motors in reverse.
     double combinedPower =
         MathUtil.applyDeadband(
             driverController.getRightTriggerAxis() - driverController.getLeftTriggerAxis(), 0.05);
